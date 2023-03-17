@@ -9,9 +9,9 @@
 ![image](https://user-images.githubusercontent.com/57258378/225853069-a1f1eefe-32d1-46ea-a1ea-13ae98c75581.png)
 
 ### 运行说明
-- 1. 将项目clone到与data文件夹（影响因子与标签均存放于data文件夹）同一目录下
-- 2. 将cofig中第一个参数修改为自己的data文件夹名称
-- 3. 运行 **start.py**
+- 将项目clone到与data文件夹（影响因子与标签均存放于data文件夹）同一目录下
+- 将cofig中第一个参数修改为自己的data文件夹名称, 其余参数均有详细注释
+- 运行 **start.py**
 ### 必要库安装
 - GDAL   2.4.1
 
