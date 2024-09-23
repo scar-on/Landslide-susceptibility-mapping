@@ -49,3 +49,13 @@ python generate_LSM.py --slide_window 512
 - [ ] MAE training.
 
 If you have any questions, submit an issue or email me!
+### Citation
+```
+@inproceedings{Zhang2022ComparingCN,
+  title={Comparing Convolutional Neural Network and Machine Learning Models in Landslide Susceptibility Mapping: A Case Study in Wenchuan County},
+  author={Sikui Zhang and Lin Bai and Yuanwei Li and Wei-le Li and Mingli Xie},
+  booktitle={Frontiers in Environmental Science},
+  year={2022},
+  url={https://api.semanticscholar.org/CorpusID:248800507}
+}
+```
