@@ -47,6 +47,7 @@ python generate_LSM.py --slide_window 512
 ```
 ### TODO
 - [ ] MAE training.
+- ...
 
 If you have any questions, submit an issue or email me!
 ### Citation
