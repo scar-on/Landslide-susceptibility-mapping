@@ -5,6 +5,14 @@ import os
 import random
 
 
+def get_feature_paths(tif_paths):
+    """
+    Return feature paths in the same directory order used by the existing
+    training code.
+    """
+    return [os.path.join(tif_paths, tif_data) for tif_data in os.listdir(tif_paths)]
+
+
 def read_data_from_tif(tif_path):
     """
     Read impact factor data and convert to nparray
@@ -20,8 +28,9 @@ def get_feature_data(tif_paths, window_size):
     """
     n = int(window_size/2)
     data = []
-    for tif_data in os.listdir(tif_paths):
-        img = read_data_from_tif(os.path.join(tif_paths, tif_data))
+    for tif_path in get_feature_paths(tif_paths):
+        tif_data = os.path.basename(tif_path)
+        img = read_data_from_tif(tif_path)
         img = (img-img.min())/(img.max()-img.min())
         w, h = img.shape[0], img.shape[1]
         print(str(tif_data)+'读取成功...')
@@ -145,6 +154,107 @@ def save_to_tif(data_path, pred_result):
     del dataset
     print('ok')
 
+
+def raster_min_max(dataset, block_size):
+    """
+    Compute min/max for a single-band raster without loading the whole raster.
+    """
+    band = dataset.GetRasterBand(1)
+    width, height = dataset.RasterXSize, dataset.RasterYSize
+    min_value = np.inf
+    max_value = -np.inf
+    for y_off in range(0, height, block_size):
+        rows = min(block_size, height - y_off)
+        for x_off in range(0, width, block_size):
+            cols = min(block_size, width - x_off)
+            block = band.ReadAsArray(x_off, y_off, cols, rows).astype(np.float32)
+            valid = np.isfinite(block)
+            if valid.any():
+                min_value = min(min_value, float(block[valid].min()))
+                max_value = max(max_value, float(block[valid].max()))
+    if not np.isfinite(min_value) or not np.isfinite(max_value):
+        return 0.0, 0.0
+    return min_value, max_value
+
+
+def read_normalized_padded_block(dataset, x_off, y_off, block_w, block_h, pad, min_value, max_value):
+    """
+    Read one raster block with surrounding context and normalized zero padding.
+    """
+    width, height = dataset.RasterXSize, dataset.RasterYSize
+    out = np.zeros((block_h + 2 * pad, block_w + 2 * pad), dtype=np.float32)
+
+    src_x = max(0, x_off - pad)
+    src_y = max(0, y_off - pad)
+    src_x_end = min(width, x_off + block_w + pad)
+    src_y_end = min(height, y_off + block_h + pad)
+    src_w = src_x_end - src_x
+    src_h = src_y_end - src_y
+    if src_w <= 0 or src_h <= 0:
+        return out
+
+    block = dataset.GetRasterBand(1).ReadAsArray(src_x, src_y, src_w, src_h).astype(np.float32)
+    denominator = max_value - min_value
+    if denominator > 0:
+        block = (block - min_value) / denominator
+    else:
+        block = np.zeros_like(block, dtype=np.float32)
+
+    dst_x = src_x - (x_off - pad)
+    dst_y = src_y - (y_off - pad)
+    out[dst_y:dst_y + src_h, dst_x:dst_x + src_w] = block
+    return out
+
+
+def iter_feature_blocks(tif_paths, window_size, block_size):
+    """
+    Yield normalized feature blocks with padding context for streaming inference.
+    """
+    feature_paths = get_feature_paths(tif_paths)
+    datasets = [gdal.Open(path) for path in feature_paths]
+    if not datasets or any(dataset is None for dataset in datasets):
+        raise RuntimeError('Failed to open one or more feature rasters.')
+
+    try:
+        width, height = datasets[0].RasterXSize, datasets[0].RasterYSize
+        stats = [raster_min_max(dataset, block_size) for dataset in datasets]
+        pad = int(window_size / 2)
+        for y_off in range(0, height, block_size):
+            block_h = min(block_size, height - y_off)
+            for x_off in range(0, width, block_size):
+                block_w = min(block_size, width - x_off)
+                data = np.empty((len(datasets), block_h + 2 * pad, block_w + 2 * pad), dtype=np.float32)
+                for index, dataset in enumerate(datasets):
+                    min_value, max_value = stats[index]
+                    data[index] = read_normalized_padded_block(
+                        dataset, x_off, y_off, block_w, block_h, pad, min_value, max_value
+                    )
+                yield x_off, y_off, block_w, block_h, data
+    finally:
+        for index in range(len(datasets)):
+            datasets[index] = None
+
+
+def create_tif_like(data_path, output_path):
+    """
+    Create a single-band float GeoTIFF using metadata from a reference raster.
+    """
+    tif = gdal.Open(data_path)
+    width, height = tif.RasterXSize, tif.RasterYSize
+    driver = gdal.GetDriverByName("GTiff")
+    os.makedirs(os.path.dirname(output_path) or '.', exist_ok=True)
+    dataset = driver.Create(output_path, width, height, 1, gdal.GDT_Float32)
+    dataset.SetGeoTransform(tif.GetGeoTransform())
+    dataset.SetProjection(tif.GetProjection())
+    return dataset
+
+
+def write_tif_block(dataset, x_off, y_off, block):
+    """
+    Write one prediction block to an open GeoTIFF dataset.
+    """
+    dataset.GetRasterBand(1).WriteArray(block, x_off, y_off)
+
 def get_ML_data(tif_paths, label_path):
     """
     Creating a ML dataset
@@ -154,8 +264,9 @@ def get_ML_data(tif_paths, label_path):
     tif = gdal.Open(label_path)
     w, h = tif.RasterXSize, tif.RasterYSize
     label = np.array(tif.ReadAsArray(0, 0, w, h).astype(np.float32))
-    for tif_data in os.listdir(tif_paths):
-        img = read_data_from_tif(os.path.join(tif_paths, tif_data))
+    for tif_path in get_feature_paths(tif_paths):
+        tif_data = os.path.basename(tif_path)
+        img = read_data_from_tif(tif_path)
         data_name.append(tif_data.split('.')[0])
         data.append(img)
     data_name.append('label')   

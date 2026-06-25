@@ -4,7 +4,6 @@ import numpy as np
 from tqdm import tqdm
 import data_prepare as dp
 from model import LSM_cnn
-from torch.utils.data import DataLoader,TensorDataset
 
 
 def parse_args():
@@ -17,31 +16,55 @@ def parse_args():
     parser.add_argument( "--epochs", default=300, type=int)
     parser.add_argument( "--slide_window", default=512, type=int)
     parser.add_argument( "--model_path", default='Result/best.pth', type=str)
+    parser.add_argument( "--output_path", default='Result/lsm_test.tif', type=str)
     args = parser.parse_args()
     return args
+
+
+def predict_block(model, feature_block, window_size, batch_size, device):
+    """
+    Predict one padded feature block and return the unpadded probability block.
+    """
+    _, padded_h, padded_w = feature_block.shape
+    block_h = padded_h - window_size + 1
+    block_w = padded_w - window_size + 1
+    window_view = np.lib.stride_tricks.sliding_window_view(
+        feature_block, (window_size, window_size), axis=(1, 2)
+    )
+    result = np.empty(block_h * block_w, dtype=np.float32)
+
+    for start in tqdm(range(0, result.size, batch_size), leave=False):
+        end = min(start + batch_size, result.size)
+        indices = np.arange(start, end)
+        rows = indices // block_w
+        cols = indices % block_w
+        batch = window_view[:, rows, cols, :, :].transpose(1, 0, 2, 3).copy()
+        images = torch.from_numpy(batch).float().to(device)
+        result[start:end] = torch.softmax(model(images), dim=1)[:, 1].cpu().numpy()
+    return result.reshape(block_h, block_w)
+
 
 def main():
     args = parse_args()
     print('*******************************************generate LSM*******************************************')
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
-    slideWindow = args.slide_window*args.slide_window
-    _, _ , n_feature, data_list = dp.pixel_to_image(args.feature_path,args.window_size)
+    feature_paths = dp.get_feature_paths(args.feature_path)
+    n_feature = len(feature_paths)
     model = LSM_cnn(n_feature)
     model.load_state_dict(torch.load(args.model_path, map_location=device))
     model.to(device)
-    probs = []
     model.eval()
+
+    output = dp.create_tif_like(args.label_path, args.output_path)
     with torch.no_grad():
-        for window in dp.generate_windows(data_list, slideWindow):
-                pred_dataset = TensorDataset(torch.from_numpy(window).float())
-                pred_loader = DataLoader(dataset=pred_dataset,batch_size=args.batch_size, shuffle=False)
-                for images in tqdm(pred_loader):
-                    images = images[0].to(device)
-                    probs.append(torch.softmax(model(images), dim=1)[:,1].cpu().numpy())
-    probs = np.concatenate(probs)
+        blocks = dp.iter_feature_blocks(args.feature_path, args.window_size, args.slide_window)
+        for x_off, y_off, block_w, block_h, feature_block in tqdm(blocks):
+            prob_block = predict_block(model, feature_block, args.window_size, args.batch_size, device)
+            dp.write_tif_block(output, x_off, y_off, prob_block[:block_h, :block_w])
+    output.FlushCache()
+    del output
     print('Finsih!')
-    dp.save_to_tif(args.label_path, probs)
 
 if __name__=='__main__':
     main()
