@@ -44,7 +44,7 @@ class SPPLayer(torch.nn.Module):
 class Modified_SPPLayer(torch.nn.Module):
 
     def __init__(self, num_levels, pool_type='max_pool'):
-        #super(SPPLayer, self).__init__()
+        super(Modified_SPPLayer, self).__init__()
         self.num_levels = num_levels
         self.pool_type = pool_type
 

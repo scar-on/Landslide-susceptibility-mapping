@@ -45,6 +45,7 @@ class LSM_cnn(nn.Module):
         self.fc1 = nn.Linear(1280, 384)
         self.dropout = nn.Dropout(0.5)
         self.fc2 = nn.Linear(384, 2)
+        self.spp = Modified_SPPLayer(2)
 
     def forward(self, x):
         x = self.conv1(x)
@@ -52,7 +53,7 @@ class LSM_cnn(nn.Module):
         x = self.conv2(x)
         x = self.se2(x)
         x = self.conv3(x)
-        spp = Modified_SPPLayer(2).forward(x)
+        spp = self.spp(x)
         #x = x.view(x.size()[0], -1)
         
         x = self.fc1(spp)
