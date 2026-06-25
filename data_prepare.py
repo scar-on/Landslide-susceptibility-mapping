@@ -235,6 +235,66 @@ def iter_feature_blocks(tif_paths, window_size, block_size):
             datasets[index] = None
 
 
+def get_raster_size(tif_path):
+    """
+    Return raster width and height.
+    """
+    dataset = gdal.Open(tif_path)
+    if dataset is None:
+        raise RuntimeError('Failed to open raster: ' + tif_path)
+    width, height = dataset.RasterXSize, dataset.RasterYSize
+    dataset = None
+    return width, height
+
+
+def feature_block_windows(width, height, block_size):
+    """
+    Yield block offsets and sizes for a raster extent.
+    """
+    for y_off in range(0, height, block_size):
+        block_h = min(block_size, height - y_off)
+        for x_off in range(0, width, block_size):
+            block_w = min(block_size, width - x_off)
+            yield x_off, y_off, block_w, block_h
+
+
+def get_feature_stats(feature_paths, block_size):
+    """
+    Compute min/max stats for feature rasters without retaining raster arrays.
+    """
+    stats = []
+    for path in feature_paths:
+        dataset = gdal.Open(path)
+        if dataset is None:
+            raise RuntimeError('Failed to open raster: ' + path)
+        stats.append(raster_min_max(dataset, block_size))
+        dataset = None
+    return stats
+
+
+def read_feature_block(feature_paths, stats, window_size, x_off, y_off, block_w, block_h):
+    """
+    Read one normalized padded feature block. Safe for worker threads because
+    each call opens its own GDAL datasets.
+    """
+    pad = int(window_size / 2)
+    datasets = [gdal.Open(path) for path in feature_paths]
+    if any(dataset is None for dataset in datasets):
+        raise RuntimeError('Failed to open one or more feature rasters.')
+
+    try:
+        data = np.empty((len(datasets), block_h + 2 * pad, block_w + 2 * pad), dtype=np.float32)
+        for index, dataset in enumerate(datasets):
+            min_value, max_value = stats[index]
+            data[index] = read_normalized_padded_block(
+                dataset, x_off, y_off, block_w, block_h, pad, min_value, max_value
+            )
+        return x_off, y_off, block_w, block_h, data
+    finally:
+        for index in range(len(datasets)):
+            datasets[index] = None
+
+
 def create_tif_like(data_path, output_path):
     """
     Create a single-band float GeoTIFF using metadata from a reference raster.
